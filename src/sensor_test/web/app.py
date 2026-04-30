@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from starlette.staticfiles import StaticFiles
 
 from sensor_test.frame_processing import frame_to_view
 from sensor_test.i2c_reader import I2CReader, RawFrame
@@ -58,6 +61,18 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Optional: serve built frontend from the backend (single-process deploy).
+    # If `frontend/dist` exists, mount it at `/` and fall back to `index.html`.
+    # `.../src/sensor_test/web/app.py` -> parents[0]=web,1=sensor_test,2=src,3=repo_root
+    repo_root = Path(__file__).resolve().parents[3]
+    dist_dir = (repo_root / "frontend" / "dist").resolve()
+    if dist_dir.exists():
+        app.mount("/", StaticFiles(directory=str(dist_dir), html=True), name="frontend")
+
+        @app.get("/")
+        def _index() -> FileResponse:
+            return FileResponse(dist_dir / "index.html")
 
     @app.get("/api/health")
     def health() -> dict[str, str]:

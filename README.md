@@ -12,6 +12,34 @@ This repo provides:
 uv run uvicorn sensor_test.web.app:app --host 0.0.0.0 --port 8000
 ```
 
+- **One command (dev) runs frontend + backend**
+
+```bash
+uv run sensor-test dev --host 0.0.0.0
+```
+
+Then open:
+- Frontend: `http://192.168.0.27:5173`
+- Backend/API: `http://192.168.0.27:8000`
+
+- **One command (deploy) serves built frontend + backend**
+  - First build the frontend:
+
+```bash
+cd frontend
+npm install
+npm run build
+cd ..
+```
+
+  - Then run a single backend process (it will serve `frontend/dist` if present):
+
+```bash
+uv run sensor-test serve --host 0.0.0.0 --port 8000
+```
+
+Open: `http://192.168.0.27:8000`
+
 Endpoints:
 - `GET /api/health`
 - `GET/PUT /api/config`
