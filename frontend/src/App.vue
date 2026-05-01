@@ -266,8 +266,9 @@ const smoothing = reactive({
 })
 
 // State for smoothing across frames.
-const emaState = reactive({})
-const windowState = reactive({})
+// Use non-reactive state here; mutating reactive state during render can freeze the UI.
+const emaState = new Map()
+const windowState = new Map()
 
 const addressHex = computed({
   get: () => `0x${Number(config.address).toString(16)}`,
@@ -313,14 +314,18 @@ function smoothNumber(key, x) {
 
   if (smoothing.mode === 'ema') {
     const alpha = clamp(Number(smoothing.param) || 0.2, 0.0, 1.0)
-    const prev = emaState[key]
+    const prev = emaState.get(key)
     const next = prev === undefined ? x : alpha * x + (1 - alpha) * prev
-    emaState[key] = next
+    emaState.set(key, next)
     return next
   }
 
   const win = Math.max(1, Math.floor(Number(smoothing.param) || 5))
-  const arr = windowState[key] ?? (windowState[key] = [])
+  const arr = windowState.get(key) ?? (() => {
+    const a = []
+    windowState.set(key, a)
+    return a
+  })()
   arr.push(x)
   if (arr.length > win) arr.splice(0, arr.length - win)
   const sum = arr.reduce((a, b) => a + b, 0)
