@@ -7,7 +7,6 @@ from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 from starlette.staticfiles import StaticFiles
 
 from sensor_test.frame_processing import frame_to_view
@@ -61,18 +60,6 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    # Optional: serve built frontend from the backend (single-process deploy).
-    # If `frontend/dist` exists, mount it at `/` and fall back to `index.html`.
-    # `.../src/sensor_test/web/app.py` -> parents[0]=web,1=sensor_test,2=src,3=repo_root
-    repo_root = Path(__file__).resolve().parents[3]
-    dist_dir = (repo_root / "frontend" / "dist").resolve()
-    if dist_dir.exists():
-        app.mount("/", StaticFiles(directory=str(dist_dir), html=True), name="frontend")
-
-        @app.get("/")
-        def _index() -> FileResponse:
-            return FileResponse(dist_dir / "index.html")
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
@@ -183,6 +170,13 @@ def create_app() -> FastAPI:
             ws_clients.discard(ws)
         except Exception:
             ws_clients.discard(ws)
+
+    # Optional: serve built frontend from the backend (single-process deploy).
+    # Important: mount it *after* /api routes so it doesn't shadow them.
+    repo_root = Path(__file__).resolve().parents[3]
+    dist_dir = (repo_root / "frontend" / "dist").resolve()
+    if dist_dir.exists():
+        app.mount("/", StaticFiles(directory=str(dist_dir), html=True), name="frontend")
 
     return app
 
