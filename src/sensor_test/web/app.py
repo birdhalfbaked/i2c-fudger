@@ -11,7 +11,7 @@ from starlette.staticfiles import StaticFiles
 
 from sensor_test.frame_processing import frame_to_view
 from sensor_test.i2c_reader import I2CReader, RawFrame
-from sensor_test.models import CType, Endianness, FieldSpec, I2CConfig, SchemaSpec
+from sensor_test.models import CType, Endianness, FieldSpec, I2CConfig, I2CWrite, SchemaSpec
 from sensor_test.pi_presets import PI_I2C_PRESETS, preset_by_key
 
 
@@ -106,6 +106,46 @@ def create_app() -> FastAPI:
                 FieldSpec(name="gyro_x", type=CType.int16, count=1, endianness=Endianness.big),
                 FieldSpec(name="gyro_y", type=CType.int16, count=1, endianness=Endianness.big),
                 FieldSpec(name="gyro_z", type=CType.int16, count=1, endianness=Endianness.big),
+            ]
+        )
+        return {"ok": True, "config": cfg.model_dump(), "schema": schema.model_dump(), "total_bytes": schema.total_bytes}
+
+    @app.post("/api/examples/ak8975c/apply")
+    def apply_ak8975c_example() -> dict[str, Any]:
+        """
+        Apply a known-good configuration + schema for the AK8975C magnetometer:
+        - Enable MPU I2C bypass (INT_PIN_CFG 0x37 = 0x02)
+        - Trigger single measurement (CNTL 0x0A = 0x01) each cycle
+        - Read 8 bytes starting at ST1 (0x02): ST1 + HXL..HZH + ST2
+        - Decode X/Y/Z as little-endian int16 (AK outputs low/high byte order)
+        """
+        nonlocal schema
+
+        cfg = reader.get_config()
+        cfg.address = 0x0C
+        cfg.register = 0x02
+        cfg.register_width = 1
+        cfg.read_length = 8
+        cfg.poll_hz = 20.0
+
+        # One-time setup: wake MPU and enable bypass so Pi can talk to 0x0C directly.
+        cfg.setup_writes = [
+            I2CWrite(address=0x68, register=0x6B, value=0x00),  # PWR_MGMT_1: wake
+            I2CWrite(address=0x68, register=0x37, value=0x02),  # INT_PIN_CFG: BYPASS_EN
+        ]
+        # Per-sample: start a single measurement (datasheet typical).
+        cfg.cycle_write = I2CWrite(address=0x0C, register=0x0A, value=0x01)  # CNTL: single measurement
+        cfg.cycle_delay_ms = 10
+
+        reader.set_config(cfg)
+
+        schema = SchemaSpec(
+            fields=[
+                FieldSpec(name="st1", type=CType.uint8, count=1, endianness=Endianness.little),
+                FieldSpec(name="mag_x", type=CType.int16, count=1, endianness=Endianness.little),
+                FieldSpec(name="mag_y", type=CType.int16, count=1, endianness=Endianness.little),
+                FieldSpec(name="mag_z", type=CType.int16, count=1, endianness=Endianness.little),
+                FieldSpec(name="st2", type=CType.uint8, count=1, endianness=Endianness.little),
             ]
         )
         return {"ok": True, "config": cfg.model_dump(), "schema": schema.model_dump(), "total_bytes": schema.total_bytes}

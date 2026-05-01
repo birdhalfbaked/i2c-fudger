@@ -104,7 +104,18 @@ class I2CReader:
             gy = int(5000 * math.cos(t * 1.1))
             gz = int(5000 * math.sin(t * 0.8 + 2.0))
             raw14 = struct.pack(">hhhhhhh", ax, ay, az, temp, gx, gy, gz)
-            data = raw14[: cfg.read_length].ljust(cfg.read_length, b"\x00")
+            # Also simulate AK8975C read starting at ST1 (0x02):
+            # ST1 + (HXL..HZH) + ST2 => 8 bytes.
+            if cfg.address == 0x0C and cfg.register == 0x02 and cfg.read_length >= 8:
+                mx = int(2000 * math.sin(t * 0.5))
+                my = int(2000 * math.cos(t * 0.7))
+                mz = int(2000 * math.sin(t * 0.6 + 1.5))
+                # AK8975C outputs little-endian low/high bytes.
+                mag = struct.pack("<hhh", mx, my, mz)
+                data = bytes([0x01]) + mag + bytes([0x00])  # ST1=DRDY, ST2=0
+                data = data[: cfg.read_length].ljust(cfg.read_length, b"\x00")
+            else:
+                data = raw14[: cfg.read_length].ljust(cfg.read_length, b"\x00")
             return RawFrame(
                 ts_unix=ts,
                 bus=cfg.bus,
@@ -123,6 +134,10 @@ class I2CReader:
             write = i2c_msg.write(cfg.address, reg_bytes)
             read = i2c_msg.read(cfg.address, cfg.read_length)
             with SMBus(cfg.bus) as bus:
+                if cfg.cycle_write is not None:
+                    bus.write_byte_data(cfg.cycle_write.address, cfg.cycle_write.register, cfg.cycle_write.value)
+                    if cfg.cycle_delay_ms:
+                        time.sleep(cfg.cycle_delay_ms / 1000.0)
                 bus.i2c_rdwr(write, read)
             data = bytes(read)
             return RawFrame(
@@ -146,12 +161,23 @@ class I2CReader:
 
     def _run(self) -> None:
         next_t = time.perf_counter()
+        did_setup = False
         while True:
             with self._lock:
                 running = self._running
                 cfg = self._config.model_copy(deep=True)
             if not running:
                 return
+
+            if not did_setup and cfg.transport != "mock_mpu9150" and cfg.setup_writes:
+                try:
+                    with SMBus(cfg.bus) as bus:
+                        for w in cfg.setup_writes:
+                            bus.write_byte_data(w.address, w.register, w.value)
+                    did_setup = True
+                except Exception:
+                    # If setup fails, keep trying; capture error in the next frame.
+                    pass
 
             frame = self._read_once(cfg)
             self._push_frame(frame)

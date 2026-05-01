@@ -85,6 +85,14 @@
                     </v-btn>
                   </v-col>
                 </v-row>
+
+                <v-row class="mt-2" dense>
+                  <v-col cols="12">
+                    <v-btn block variant="tonal" @click="applyMagExample">
+                      Apply AK8975C magnetometer (0x0C, reg 0x02, len 8, int16 LE)
+                    </v-btn>
+                  </v-col>
+                </v-row>
               </v-card-text>
             </v-card>
 
@@ -146,6 +154,40 @@
                 <v-btn size="small" variant="tonal" @click="refreshFrames">Refresh</v-btn>
               </v-card-title>
               <v-card-text>
+                <v-expansion-panels variant="accordion" class="mb-3">
+                  <v-expansion-panel>
+                    <v-expansion-panel-title>Smoothing (display only)</v-expansion-panel-title>
+                    <v-expansion-panel-text>
+                      <v-row dense>
+                        <v-col cols="12" sm="4">
+                          <v-switch v-model="smoothing.enabled" label="Enable smoothing" inset />
+                        </v-col>
+                        <v-col cols="12" sm="4">
+                          <v-select
+                            v-model="smoothing.mode"
+                            :items="['ema', 'moving_average']"
+                            label="Mode"
+                            density="comfortable"
+                            :disabled="!smoothing.enabled"
+                          />
+                        </v-col>
+                        <v-col cols="12" sm="4">
+                          <v-text-field
+                            v-model.number="smoothing.param"
+                            :label="smoothing.mode === 'ema' ? 'EMA alpha (0..1)' : 'Window (samples)'"
+                            density="comfortable"
+                            type="number"
+                            :disabled="!smoothing.enabled"
+                          />
+                        </v-col>
+                      </v-row>
+                      <div class="text-caption">
+                        This does not change the raw bytes; it only smooths the decoded numbers you see here.
+                      </div>
+                    </v-expansion-panel-text>
+                  </v-expansion-panel>
+                </v-expansion-panels>
+
                 <v-alert v-if="streamStatus" type="info" variant="tonal" class="mb-3">
                   {{ streamStatus }}
                 </v-alert>
@@ -167,7 +209,7 @@
                       <td>
                         <div v-if="fr.error" class="text-error">I2C error: {{ fr.error }}</div>
                         <div v-else-if="fr.decode_error" class="text-warning">Decode error: {{ fr.decode_error }}</div>
-                        <pre v-else style="margin: 0; white-space: pre-wrap">{{ fr.decoded }}</pre>
+                        <pre v-else style="margin: 0; white-space: pre-wrap">{{ displayDecoded(fr) }}</pre>
                       </td>
                     </tr>
                   </tbody>
@@ -200,6 +242,9 @@ const config = reactive({
   register_width: 1,
   read_length: 16,
   poll_hz: 10.0,
+  setup_writes: [],
+  cycle_write: null,
+  cycle_delay_ms: 10,
 })
 
 const schema = reactive({
@@ -213,6 +258,16 @@ const endianness = ['little', 'big']
 const transports = ['linux_i2c', 'mock_mpu9150']
 
 const frames = ref([])
+
+const smoothing = reactive({
+  enabled: false,
+  mode: 'ema', // 'ema' | 'moving_average'
+  param: 0.2, // EMA alpha or window size
+})
+
+// State for smoothing across frames.
+const emaState = reactive({})
+const windowState = reactive({})
 
 const addressHex = computed({
   get: () => `0x${Number(config.address).toString(16)}`,
@@ -242,6 +297,53 @@ function formatTs(tsUnix) {
 
 function setErr(e) {
   error.value = e?.message ?? String(e)
+}
+
+function isPlainNumber(x) {
+  return typeof x === 'number' && Number.isFinite(x)
+}
+
+function clamp(x, lo, hi) {
+  return Math.min(hi, Math.max(lo, x))
+}
+
+function smoothNumber(key, x) {
+  if (!smoothing.enabled) return x
+  if (!isPlainNumber(x)) return x
+
+  if (smoothing.mode === 'ema') {
+    const alpha = clamp(Number(smoothing.param) || 0.2, 0.0, 1.0)
+    const prev = emaState[key]
+    const next = prev === undefined ? x : alpha * x + (1 - alpha) * prev
+    emaState[key] = next
+    return next
+  }
+
+  const win = Math.max(1, Math.floor(Number(smoothing.param) || 5))
+  const arr = windowState[key] ?? (windowState[key] = [])
+  arr.push(x)
+  if (arr.length > win) arr.splice(0, arr.length - win)
+  const sum = arr.reduce((a, b) => a + b, 0)
+  return sum / arr.length
+}
+
+function smoothDecoded(decoded) {
+  if (!decoded || typeof decoded !== 'object') return decoded
+  const out = {}
+  for (const [k, v] of Object.entries(decoded)) {
+    if (isPlainNumber(v)) {
+      out[k] = smoothNumber(k, v)
+    } else if (Array.isArray(v)) {
+      out[k] = v.map((vv, idx) => smoothNumber(`${k}[${idx}]`, vv))
+    } else {
+      out[k] = v
+    }
+  }
+  return out
+}
+
+function displayDecoded(frame) {
+  return smoothing.enabled ? smoothDecoded(frame.decoded) : frame.decoded
 }
 
 async function loadInitial() {
@@ -315,6 +417,19 @@ async function applyMpuExample() {
   try {
     error.value = ''
     const resp = await apiPost('/api/examples/mpu9150/apply')
+    Object.assign(config, resp.config)
+    schemaInfo.value = { total_bytes: resp.total_bytes }
+    schema.fields = (resp.schema?.fields ?? []).map((x) => ({ ...x }))
+    await refreshFrames()
+  } catch (e) {
+    setErr(e)
+  }
+}
+
+async function applyMagExample() {
+  try {
+    error.value = ''
+    const resp = await apiPost('/api/examples/ak8975c/apply')
     Object.assign(config, resp.config)
     schemaInfo.value = { total_bytes: resp.total_bytes }
     schema.fields = (resp.schema?.fields ?? []).map((x) => ({ ...x }))

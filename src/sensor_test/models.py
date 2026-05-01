@@ -47,6 +47,12 @@ class SchemaSpec(BaseModel):
         return sum(field_nbytes(f) for f in self.fields)
 
 
+class I2CWrite(BaseModel):
+    address: Annotated[int, Field(ge=0, le=127)]
+    register: Annotated[int, Field(ge=0, le=0xFF)]
+    value: Annotated[int, Field(ge=0, le=0xFF)]
+
+
 class I2CConfig(BaseModel):
     enabled: bool = False
 
@@ -65,6 +71,12 @@ class I2CConfig(BaseModel):
 
     read_length: Annotated[int, Field(ge=1, le=4096)] = 16
     poll_hz: Annotated[float, Field(gt=0.0, le=1000.0)] = 10.0
+
+    # Optional: one-time writes when starting acquisition (e.g. wake MPU, enable bypass).
+    setup_writes: list[I2CWrite] = Field(default_factory=list)
+    # Optional: per-sample write before the read (e.g. trigger single measurement).
+    cycle_write: I2CWrite | None = None
+    cycle_delay_ms: Annotated[int, Field(ge=0, le=5000)] = 10
 
     @model_validator(mode="after")
     def _reg_fits_width(self) -> "I2CConfig":
